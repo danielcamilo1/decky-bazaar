@@ -1,0 +1,103 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Build frontend
+        run: pnpm run build
+
+      - name: Package plugin zip
+        run: pnpm run package
+
+      - name: Read plugin metadata
+        id: meta
+        run: |
+          version=$(node -p "require('./package.json').version")
+          zip=$(ls out/*.zip)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$zip")" >> "$GITHUB_OUTPUT"
+
+      # Every build is downloadable from the run itself, released or not.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: ${{ steps.meta.outputs.zip }}
+          if-no-files-found: error
+
+      # A release needs a unique tag, so only cut one when package.json's
+      # version has moved past whatever was released last.
+      - name: Check whether this version was already released
+        id: tag
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ steps.meta.outputs.version }}" >/dev/null 2>&1; then
+            echo "Tag v${{ steps.meta.outputs.version }} already exists — skipping release."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # What changed comes from CHANGELOG.md, so the release page says something
+      # about this version rather than only how to install it. A version with no
+      # section still releases — with the install instructions alone.
+      - name: Build release notes
+        if: steps.tag.outputs.exists == 'false'
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          awk -v heading="## v$version" '
+            $0 == heading { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > changelog-section.md
+
+          if [ -s changelog-section.md ]; then
+            cat changelog-section.md > release-notes.md
+          else
+            echo "::warning::No CHANGELOG.md section for v$version."
+            : > release-notes.md
+          fi
+
+          cat >> release-notes.md <<'EOF'
+
+          ## Installing
+
+          Install in Decky Loader with **Settings → Developer mode → Install Plugin from URL**, using the `.zip` link below, or download it and copy it to the Deck.
+
+          Already running Decky Bazaar? Add `danielcamilo1/decky-bazaar` to it and let it update itself.
+          EOF
+
+      - name: Create release
+        if: steps.tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          name: v${{ steps.meta.outputs.version }}
+          files: ${{ steps.meta.outputs.zip }}
+          generate_release_notes: true
+          body_path: release-notes.md
