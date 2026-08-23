@@ -293,8 +293,9 @@ class Plugin:
         """List releases for a repo, keeping only the ones that ship a zip asset.
         A non-empty `branch` keeps only releases whose tag was cut from it."""
         state = self._load_state()
+        setting_prereleases = bool(state["settings"]["include_prereleases"])
         if include_prereleases is None:
-            include_prereleases = state["settings"]["include_prereleases"]
+            include_prereleases = setting_prereleases
 
         owner, repo = owner.strip(), repo.strip()
         branch = (branch or "").strip()
@@ -308,12 +309,17 @@ class Plugin:
             return {"ok": False, "error": str(e), "status": e.status}
 
         releases = []
+        hidden_prereleases = 0
         for release in raw:
             if release.get("draft"):
                 continue
-            if release.get("prerelease") and not include_prereleases:
-                continue
+            # Branch first: a pre-release on some other branch was never on offer,
+            # so counting it as "hidden by the pre-release setting" would send the
+            # user to a toggle that changes nothing.
             if branch and not _release_matches_branch(release, branch):
+                continue
+            if release.get("prerelease") and not include_prereleases:
+                hidden_prereleases += 1
                 continue
             assets = [
                 {
@@ -340,6 +346,17 @@ class Plugin:
             )
 
         if not releases:
+            if hidden_prereleases:
+                plural = "" if hidden_prereleases == 1 else "s"
+                where = f' on "{branch}"' if branch else ""
+                return {
+                    "ok": False,
+                    "error": (
+                        f"{hidden_prereleases} release{plural}{where} {'is' if hidden_prereleases == 1 else 'are'} "
+                        "marked pre-release and hidden. Turn on \u201cInclude pre-releases\u201d to use them."
+                    ),
+                    "hidden_prereleases": hidden_prereleases,
+                }
             if branch:
                 return {
                     "ok": False,
@@ -353,7 +370,14 @@ class Plugin:
                 "ok": False,
                 "error": "No release with a .zip asset was found. Decky plugins are published as a zip on the releases page.",
             }
-        return {"ok": True, "releases": releases}
+        return {
+            "ok": True,
+            "releases": releases,
+            # The stored setting, not the argument: callers that asked for every
+            # release still need to know what the user's default is.
+            "include_prereleases": setting_prereleases,
+            "hidden_prereleases": hidden_prereleases,
+        }
 
     async def stage_asset(self, download_url: str, api_url: str = "", asset_name: str = "plugin.zip") -> Dict[str, Any]:
         """Download a release zip and read the plugin name and version out of it,

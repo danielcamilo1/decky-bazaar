@@ -119,7 +119,16 @@ export interface Release {
   assets: ReleaseAsset[];
 }
 
-export type ReleaseListing = { ok: true; releases: Release[] } | { ok: false; error: string; status?: number };
+export type ReleaseListing =
+  | {
+      ok: true;
+      releases: Release[];
+      /** The user's stored setting, regardless of what this call asked for. */
+      include_prereleases: boolean;
+      /** Releases withheld because they are pre-releases, after branch filtering. */
+      hidden_prereleases: number;
+    }
+  | { ok: false; error: string; status?: number; hidden_prereleases?: number };
 
 export type StagedAsset =
   | {

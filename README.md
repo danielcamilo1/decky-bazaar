@@ -20,7 +20,9 @@ installer, remembers the version, and tells you when a newer release shows up.
 - **Pins a plugin to a branch.** Pick a branch when adding or re-pointing a plugin and only releases
   tagged from it are offered — then and on every later update check. Follow `main` on one plugin and
   a `beta` branch on another. Leave it on **Any branch** to consider every release, which is what
-  plugins tracked before this existed keep doing.
+  plugins tracked before this existed keep doing. Because a preview branch usually ships
+  pre-releases, **Include pre-releases** sits next to the branch picker and reports how many
+  releases it is hiding.
 - **Tracks versions and offers updates.** Each tracked plugin records the release tag and branch it
   came from. One button re-checks them all against GitHub.
 - **Adopts plugins you already have.** Link an existing plugin to a repo and mark the release you

@@ -1,6 +1,6 @@
 {
   "name": "decky-bazaar",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Manage every installed Decky plugin, including ones from outside the official store, and keep them updated from GitHub releases.",
   "type": "module",
   "scripts": {

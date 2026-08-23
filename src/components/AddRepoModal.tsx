@@ -6,6 +6,7 @@ import {
   Field,
   ModalRoot,
   Spinner,
+  ToggleField,
 } from '@decky/ui';
 import { FC, useMemo, useState } from 'react';
 
@@ -16,6 +17,7 @@ import {
   getBranches,
   getReleases,
   releaseMatchesBranch,
+  setSetting,
   track,
 } from '../lib/api';
 import { installRelease, toastOutcome } from '../lib/install';
@@ -63,6 +65,7 @@ export const AddRepoModal: FC<AddRepoModalProps> = ({ closeModal, onDone, existi
   const [defaultBranch, setDefaultBranch] = useState('');
   const [branchError, setBranchError] = useState('');
   const [branch, setBranch] = useState(existing?.branch ?? ANY_BRANCH);
+  const [showPrereleases, setShowPrereleases] = useState(false);
   const [releaseIndex, setReleaseIndex] = useState(0);
   const [assetIndex, setAssetIndex] = useState(0);
 
@@ -74,12 +77,19 @@ export const AddRepoModal: FC<AddRepoModalProps> = ({ closeModal, onDone, existi
   const ref: RepoRef = { owner: owner.trim(), repo: repo.trim() };
   const canSearch = isValidOwner(ref.owner) && isValidRepo(ref.repo);
 
-  // Filtering here rather than re-asking the backend keeps switching branches
-  // free, which matters against a 60-requests-per-hour rate limit.
-  const visible = useMemo(
+  // Every release is fetched once, including pre-releases, and narrowed here.
+  // Filtering locally rather than re-asking the backend keeps flipping a branch
+  // or the pre-release toggle free, which matters against a 60-requests-per-hour
+  // rate limit — and it is the only way to say how many releases a filter hid.
+  const onBranch = useMemo(
     () => releases.filter((r) => releaseMatchesBranch(r, branch)),
     [releases, branch],
   );
+  const visible = useMemo(
+    () => onBranch.filter((r) => showPrereleases || !r.prerelease),
+    [onBranch, showPrereleases],
+  );
+  const hiddenPrereleases = onBranch.length - visible.length;
   const release: Release | undefined = visible[releaseIndex];
   const asset: ReleaseAsset | undefined = release?.assets[assetIndex];
 
@@ -122,7 +132,9 @@ export const AddRepoModal: FC<AddRepoModalProps> = ({ closeModal, onDone, existi
     // The branch list is a nicety: a failure there must not stop an install, so
     // both requests go out together and only the release one can fail the step.
     const [listing, branchListing] = await Promise.all([
-      getReleases(ref.owner, ref.repo, null),
+      // `true`: fetch pre-releases too and let the toggle below decide, so a
+      // branch that only ever ships pre-releases does not look empty.
+      getReleases(ref.owner, ref.repo, true),
       getBranches(ref.owner, ref.repo),
     ]);
 
@@ -143,9 +155,12 @@ export const AddRepoModal: FC<AddRepoModalProps> = ({ closeModal, onDone, existi
       return;
     }
     setReleases(listing.releases);
+    setShowPrereleases(listing.include_prereleases);
     setAssetIndex(0);
     // If we already know which version is installed, preselect a matching tag.
-    const shown = listing.releases.filter((r) => releaseMatchesBranch(r, branch));
+    const shown = listing.releases.filter(
+      (r) => releaseMatchesBranch(r, branch) && (listing.include_prereleases || !r.prerelease),
+    );
     let index = 0;
     if (existing?.installedVersion) {
       const wanted = existing.installedVersion.replace(/^v/i, '');
@@ -160,6 +175,15 @@ export const AddRepoModal: FC<AddRepoModalProps> = ({ closeModal, onDone, existi
     setBranch(next);
     setReleaseIndex(0);
     setAssetIndex(0);
+  };
+
+  // Written straight through: update checks run on the backend and read this
+  // same setting, so the toggle has to mean the same thing in both places.
+  const togglePrereleases = async (next: boolean) => {
+    setShowPrereleases(next);
+    setReleaseIndex(0);
+    setAssetIndex(0);
+    await setSetting('include_prereleases', next);
   };
 
   const doInstall = async () => {
@@ -267,6 +291,19 @@ export const AddRepoModal: FC<AddRepoModalProps> = ({ closeModal, onDone, existi
               />
             </Field>
 
+            <ToggleField
+              label="Include pre-releases"
+              description={
+                hiddenPrereleases > 0
+                  ? `${hiddenPrereleases} release${hiddenPrereleases === 1 ? '' : 's'}${
+                      branch ? ` on ${branch}` : ''
+                    } ${hiddenPrereleases === 1 ? 'is' : 'are'} marked pre-release and hidden.`
+                  : 'Also offer releases GitHub marks as pre-release, here and when checking for updates.'
+              }
+              checked={showPrereleases}
+              onChange={togglePrereleases}
+            />
+
             {release ? (
               <>
                 <Field label="Release" bottomSeparator="none" childrenContainerWidth="max">
@@ -330,6 +367,11 @@ export const AddRepoModal: FC<AddRepoModalProps> = ({ closeModal, onDone, existi
                   ) : null}
                 </div>
               </>
+            ) : hiddenPrereleases > 0 ? (
+              <div style={{ margin: '12px 0', fontSize: '13px', opacity: 0.85 }}>
+                Every release{branch ? ` on ${branch}` : ''} is marked pre-release. Turn on
+                {' "Include pre-releases"'} above to install one.
+              </div>
             ) : (
               <div style={{ margin: '12px 0', fontSize: '13px', opacity: 0.85 }}>
                 None of this repo's {releases.length} release

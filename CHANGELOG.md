@@ -4,6 +4,23 @@ The section for a version is what the release workflow puts on that release's
 page, so write it for someone deciding whether to update — not for someone
 reading the diff.
 
+## v1.1.1
+
+Fixes a branch showing up empty when its releases are pre-releases.
+
+Picking a branch hid pre-releases before it ever considered the branch, so a
+branch that ships previews — a `testing` or `beta` branch, which is most of the
+reason to pin one in the first place — looked like it had no releases at all,
+and the dialog blamed the branch for it.
+
+- **Pre-releases are now counted per branch**, and the dialog says how many it is
+  hiding and why instead of claiming nothing was tagged from the branch.
+- **"Include pre-releases" is in the Add and Source dialogs**, next to the branch
+  picker where the question actually comes up. It is the same setting as the one
+  in Settings, so update checks follow it too.
+- Flipping it is instant — every release is fetched once and narrowed on the
+  Deck, so neither the toggle nor the branch picker spends a GitHub request.
+
 ## v1.1.0
 
 Plugins can now follow a single branch of their repo instead of every release.
