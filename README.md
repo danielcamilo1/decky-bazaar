@@ -17,8 +17,12 @@ installer, remembers the version, and tells you when a newer release shows up.
 - **Finds the release zip for you.** It lists releases that ship a `.zip` asset, newest first, and
   reads the plugin's real name and version out of the zip before installing, so the plugin lands
   under the name Decky expects rather than a guess from the file name.
-- **Tracks versions and offers updates.** Each tracked plugin records the release tag it came from.
-  One button re-checks them all against GitHub.
+- **Pins a plugin to a branch.** Pick a branch when adding or re-pointing a plugin and only releases
+  tagged from it are offered — then and on every later update check. Follow `main` on one plugin and
+  a `beta` branch on another. Leave it on **Any branch** to consider every release, which is what
+  plugins tracked before this existed keep doing.
+- **Tracks versions and offers updates.** Each tracked plugin records the release tag and branch it
+  came from. One button re-checks them all against GitHub.
 - **Adopts plugins you already have.** Link an existing plugin to a repo and mark the release you
   are already on, without reinstalling anything.
 - **Optional GitHub token** to lift the 60-requests-per-hour anonymous rate limit and reach private
@@ -43,7 +47,7 @@ Open the Quick Access menu, pick **Decky Bazaar**, and:
 | --- | --- |
 | Install something new | **Add plugin from GitHub** |
 | Re-check every tracked plugin | **Check … for updates** |
-| Update, relink, or uninstall one plugin | Tap its row in **Installed** |
+| Update, relink, change branch, or uninstall one plugin | Tap its row in **Installed** |
 | Token and pre-release options | **Settings** |
 
 Rows sort so anything with an update waiting is at the top.
@@ -96,6 +100,9 @@ src/index.tsx                the Quick Access panel
 
 - Update detection compares release **tags**. A repo that reuses or rewrites tags will look
   up to date when it isn't.
+- Branch pinning uses the branch GitHub recorded for the tag (`target_commitish`). A release tagged
+  straight from a commit rather than a branch carries a bare commit SHA there, so it matches no
+  branch at all and only shows up under **Any branch**.
 - If a plugin is updated outside Bazaar, its row is flagged as drifted rather than silently
   re-pointed.
 - Only `.zip` release assets are considered, since that is what decky-loader can install.

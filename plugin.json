@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["plugin-manager", "utility"],
-    "description": "Manage every installed Decky plugin, including ones from outside the official store. Add a GitHub repo by owner/name, install the latest release zip, and keep track of updates.",
+    "description": "Manage every installed Decky plugin, including ones from outside the official store. Add a GitHub repo by owner/name, install the latest release zip from any branch, and keep track of updates.",
     "image": "https://opengraph.githubassets.com/1/SteamDeckHomebrew/PluginLoader"
   }
 }

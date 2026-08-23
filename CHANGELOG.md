@@ -4,6 +4,24 @@ The section for a version is what the release workflow puts on that release's
 page, so write it for someone deciding whether to update — not for someone
 reading the diff.
 
+## v1.1.0
+
+Plugins can now follow a single branch of their repo instead of every release.
+
+- **Pick a branch when adding or re-pointing a plugin.** The Add and Source
+  dialogs list the repo's branches, with the default branch first. Only releases
+  whose tag was cut from the chosen branch are offered — and every later update
+  check stays on that branch, so a plugin set to `beta` never offers a `main`
+  release and the other way round.
+- **Any branch** is still the default, so plugins tracked before this update
+  keep considering every release until you narrow them down.
+- The panel row and the plugin's Source line now show which branch is being
+  followed, as `owner/repo@branch`.
+
+Note that GitHub only records the branch a tag was *cut from*. A release tagged
+straight from a commit has no branch attached and shows up only under **Any
+branch**.
+
 ## v1.0.0
 
 First release.

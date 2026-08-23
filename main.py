@@ -257,13 +257,47 @@ class Plugin:
             "self_name": decky.DECKY_PLUGIN_NAME,
         }
 
-    async def get_releases(self, owner: str, repo: str, include_prereleases: Optional[bool] = None) -> Dict[str, Any]:
-        """List releases for a repo, keeping only the ones that ship a zip asset."""
+    async def get_branches(self, owner: str, repo: str) -> Dict[str, Any]:
+        """List the repo's branches so a plugin can be pinned to releases cut from
+        one of them. The default branch is reported separately because the branch
+        listing does not say which one it is."""
+        state = self._load_state()
+        token = state["github_token"]
+
+        owner, repo = owner.strip(), repo.strip()
+        if not owner or not repo:
+            return {"ok": False, "error": "Both the owner and the repo name are required."}
+
+        base = f"{GITHUB_API}/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repo)}"
+        try:
+            info = await asyncio.to_thread(self._request, base, token)
+            raw = await asyncio.to_thread(self._request, base + "/branches?per_page=100", token)
+        except GitHubError as e:
+            return {"ok": False, "error": str(e), "status": e.status}
+
+        default_branch = info.get("default_branch", "") or ""
+        names = [b.get("name", "") for b in raw if b.get("name")]
+        # The listing is capped at 100, so make sure the default is always offered.
+        if default_branch and default_branch not in names:
+            names.insert(0, default_branch)
+        names.sort(key=lambda n: (n != default_branch, n.lower()))
+        return {"ok": True, "branches": names, "default_branch": default_branch}
+
+    async def get_releases(
+        self,
+        owner: str,
+        repo: str,
+        include_prereleases: Optional[bool] = None,
+        branch: str = "",
+    ) -> Dict[str, Any]:
+        """List releases for a repo, keeping only the ones that ship a zip asset.
+        A non-empty `branch` keeps only releases whose tag was cut from it."""
         state = self._load_state()
         if include_prereleases is None:
             include_prereleases = state["settings"]["include_prereleases"]
 
         owner, repo = owner.strip(), repo.strip()
+        branch = (branch or "").strip()
         if not owner or not repo:
             return {"ok": False, "error": "Both the owner and the repo name are required."}
 
@@ -278,6 +312,8 @@ class Plugin:
             if release.get("draft"):
                 continue
             if release.get("prerelease") and not include_prereleases:
+                continue
+            if branch and not _release_matches_branch(release, branch):
                 continue
             assets = [
                 {
@@ -295,6 +331,7 @@ class Plugin:
                 {
                     "tag": release.get("tag_name", ""),
                     "title": release.get("name") or release.get("tag_name", ""),
+                    "target_commitish": release.get("target_commitish", "") or "",
                     "published_at": release.get("published_at", ""),
                     "prerelease": bool(release.get("prerelease")),
                     "notes": (release.get("body") or "")[:2000],
@@ -303,6 +340,15 @@ class Plugin:
             )
 
         if not releases:
+            if branch:
+                return {
+                    "ok": False,
+                    "error": (
+                        f'No release with a .zip asset was cut from the "{branch}" branch. GitHub only '
+                        "records which branch a tag came from, so a release tagged straight from a commit "
+                        "will not match any branch."
+                    ),
+                }
             return {
                 "ok": False,
                 "error": "No release with a .zip asset was found. Decky plugins are published as a zip on the releases page.",
@@ -346,19 +392,28 @@ class Plugin:
         tag: str = "",
         asset_name: str = "",
         version: str = "",
+        branch: str = "",
     ) -> Dict[str, Any]:
         """Record where a plugin came from so we can check it for updates."""
         state = self._load_state()
         state["sources"][plugin_name] = {
             "owner": owner.strip(),
             "repo": repo.strip(),
+            "branch": (branch or "").strip(),
             "tag": tag,
             "asset_name": asset_name,
             "version": version,
             "updated_at": int(time.time()),
         }
         self._save_state(state)
-        decky.logger.info("Tracking %s at %s/%s (%s)", plugin_name, owner, repo, tag or "unknown tag")
+        decky.logger.info(
+            "Tracking %s at %s/%s%s (%s)",
+            plugin_name,
+            owner,
+            repo,
+            f"@{branch.strip()}" if (branch or "").strip() else "",
+            tag or "unknown tag",
+        )
         return {"ok": True}
 
     async def untrack(self, plugin_name: str) -> Dict[str, Any]:
@@ -377,9 +432,10 @@ class Plugin:
         for name, source in state["sources"].items():
             if name not in installed:
                 continue
-            listing = await self.get_releases(source["owner"], source["repo"], include_prereleases)
+            branch = source.get("branch", "") or ""
+            listing = await self.get_releases(source["owner"], source["repo"], include_prereleases, branch)
             if not listing["ok"]:
-                results[name] = {"status": "error", "error": listing["error"]}
+                results[name] = {"status": "error", "error": listing["error"], "branch": branch}
                 continue
 
             latest = listing["releases"][0]
@@ -400,6 +456,7 @@ class Plugin:
                 "notes": latest["notes"],
                 "asset": asset,
                 "installed_tag": known_tag,
+                "branch": branch,
             }
 
         state["last_checked"] = int(time.time())
@@ -439,6 +496,13 @@ class Plugin:
 
 def _normalize_version(value: str) -> str:
     return value.strip().lstrip("vV")
+
+
+def _release_matches_branch(release: Dict[str, Any], branch: str) -> bool:
+    """GitHub records the branch a release's tag was cut from in `target_commitish`.
+    It holds a raw commit SHA when the tag was made from a commit rather than a
+    branch, which no branch name can match."""
+    return (release.get("target_commitish") or "") == branch
 
 
 def _pick_asset(assets: List[Dict[str, Any]], preferred_name: str) -> Optional[Dict[str, Any]]:

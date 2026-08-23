@@ -21,13 +21,14 @@ export interface InstallOutcome {
  * Download a release zip, work out which plugin it actually contains, hand it to
  * decky-loader to install, and record where it came from once the loader says it
  * landed. `expectedName` guards updates so a repo cannot swap one plugin's
- * install for a different plugin.
+ * install for a different plugin. `branch`, when set, is the branch future
+ * update checks stay pinned to.
  */
 export async function installRelease(
   ref: RepoRef,
   release: Release,
   asset: ReleaseAsset,
-  opts: { expectedName?: string; installType?: InstallType } = {},
+  opts: { expectedName?: string; installType?: InstallType; branch?: string } = {},
 ): Promise<InstallOutcome> {
   const staged = await stageAsset(asset.download_url, asset.api_url, asset.name);
   if (!staged.ok) {
@@ -60,7 +61,15 @@ export async function installRelease(
     };
   }
 
-  await track(pluginName, ref.owner, ref.repo, release.tag, asset.name, staged.plugin_version);
+  await track(
+    pluginName,
+    ref.owner,
+    ref.repo,
+    release.tag,
+    asset.name,
+    staged.plugin_version,
+    opts.branch ?? '',
+  );
   return { ok: true, pluginName };
 }
 

@@ -22,7 +22,7 @@ function statusFor(plugin: InstalledPlugin, update: UpdateResult | undefined): {
     return { badge: plugin.version || '—', note: 'No GitHub repo linked' };
   }
   const source = plugin.source!;
-  const origin = `${source.owner}/${source.repo}`;
+  const origin = `${source.owner}/${source.repo}${source.branch ? `@${source.branch}` : ''}`;
   if (!update) {
     return { badge: plugin.version || source.tag || '—', note: origin };
   }
@@ -169,7 +169,9 @@ function Content() {
               <ButtonItem
                 layout="inline"
                 label={orphan.name}
-                description={`${orphan.source.owner}/${orphan.source.repo} · tap to forget`}
+                description={`${orphan.source.owner}/${orphan.source.repo}${
+                  orphan.source.branch ? `@${orphan.source.branch}` : ''
+                } · tap to forget`}
                 onClick={async () => {
                   await untrack(orphan.name);
                   await refresh();

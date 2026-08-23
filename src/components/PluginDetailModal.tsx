@@ -27,6 +27,7 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const source = plugin.source;
+  const branch = source?.branch ?? '';
 
   const doUpdate = async () => {
     if (!source || !update?.asset || !update.latest_tag) return;
@@ -37,13 +38,14 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
       {
         tag: update.latest_tag,
         title: update.latest_title ?? update.latest_tag,
+        target_commitish: update.branch ?? branch,
         published_at: update.published_at ?? '',
         prerelease: !!update.prerelease,
         notes: update.notes ?? '',
         assets: [update.asset],
       },
       update.asset,
-      { expectedName: plugin.name, installType: InstallType.UPDATE },
+      { expectedName: plugin.name, installType: InstallType.UPDATE, branch },
     );
     setBusy('');
     toastOutcome(outcome, `updated to ${update.latest_tag}`);
@@ -64,6 +66,7 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
           name: plugin.name,
           owner: source?.owner,
           repo: source?.repo,
+          branch,
           installedVersion: plugin.version,
         }}
       />,
@@ -100,7 +103,9 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
 
   const statusLine = (() => {
     if (!source) return 'Not linked to a GitHub repo yet.';
-    if (!update) return `Tracking ${source.tag || 'an unknown release'}. Not checked yet.`;
+    if (!update) {
+      return `Tracking ${source.tag || 'an unknown release'}${branch ? ` on ${branch}` : ''}. Not checked yet.`;
+    }
     switch (update.status) {
       case 'update':
         return `Update available: ${update.latest_tag} (you have ${update.installed_tag || 'an unknown release'}).`;
@@ -125,7 +130,17 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
             {plugin.author}
           </Field>
         ) : null}
-        <Field label="Source" bottomSeparator="standard">
+        <Field
+          label="Source"
+          bottomSeparator="standard"
+          description={
+            source
+              ? branch
+                ? `Following releases tagged from ${branch}.`
+                : 'Following releases from any branch.'
+              : undefined
+          }
+        >
           {source ? repoUrl(source) : 'unlinked'}
         </Field>
         <Field label="Status" bottomSeparator="thick" description={statusLine} />
@@ -153,7 +168,7 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
               <DialogButton onClick={doUpdate}>Update to {update.latest_tag}</DialogButton>
             ) : null}
             <DialogButton onClick={openSourceModal}>
-              {source ? 'Change GitHub repo' : 'Link a GitHub repo'}
+              {source ? 'Change repo or branch' : 'Link a GitHub repo'}
             </DialogButton>
             {source ? <DialogButton onClick={doUntrack}>Stop tracking</DialogButton> : null}
             <DialogButton onClick={doUninstall}>Uninstall</DialogButton>
