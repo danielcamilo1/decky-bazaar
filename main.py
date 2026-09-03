@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 import ssl
 import time
@@ -345,6 +346,10 @@ class Plugin:
                 }
             )
 
+        # Highest version first, so releases[0] is the latest release and the
+        # picker lists them in the order someone expects to read them.
+        releases.sort(key=_release_sort_key, reverse=True)
+
         if not releases:
             if hidden_prereleases:
                 plural = "" if hidden_prereleases == 1 else "s"
@@ -465,9 +470,15 @@ class Plugin:
             latest = listing["releases"][0]
             asset = _pick_asset(latest["assets"], source.get("asset_name", ""))
             known_tag = source.get("tag", "")
+            latest_key, known_key = _version_key(latest["tag"]), _version_key(known_tag)
             if not known_tag:
                 status = "unknown"
             elif latest["tag"] == known_tag:
+                status = "current"
+            elif latest_key is not None and known_key is not None and latest_key <= known_key:
+                # Nothing on offer is newer than what is installed — a release cut
+                # for an older line, or one pulled after we recorded a newer tag.
+                # Offering it would be a downgrade dressed up as an update.
                 status = "current"
             else:
                 status = "update"
@@ -520,6 +531,44 @@ class Plugin:
 
 def _normalize_version(value: str) -> str:
     return value.strip().lstrip("vV")
+
+
+def _version_key(value: str) -> Optional[tuple]:
+    """Order tags the way a human reads them, not the way strings compare: 1.0.10
+    comes after 1.0.9, and 1.1.0-rc1 comes before 1.1.0. Returns None for a tag
+    with no number in it at all, which nothing can be ordered against.
+
+    Segments are compared as (kind, value) pairs so a numeric segment never has
+    to be compared against a word — 1.0 sorts below 1.0.1 and below 1.0.final
+    without raising."""
+    tag = _normalize_version(value).split("+", 1)[0]
+    if not tag or not any(c.isdigit() for c in tag):
+        return None
+    core, _, pre = tag.partition("-")
+
+    def segments(text: str) -> tuple:
+        parts = []
+        for chunk in re.split(r"[.\-_]", text):
+            if not chunk:
+                continue
+            # Split runs of digits from the letters around them, so rc1 orders
+            # after rc and before rc2.
+            for piece in re.findall(r"\d+|\D+", chunk):
+                parts.append((0, int(piece)) if piece.isdigit() else (1, piece.lower()))
+        return tuple(parts)
+
+    # A release outranks any pre-release of the same version, so the absence of a
+    # suffix has to sort higher than every suffix there is.
+    return (segments(core), (0, segments(pre)) if pre else (1, ()))
+
+
+def _release_sort_key(release: Dict[str, Any]) -> tuple:
+    """Newest first once reversed. GitHub lists releases by when they were
+    created, which is not the same as which version is highest: a patch cut for
+    an older line, or a release published out of order, would otherwise be taken
+    for the latest. Tags that carry no version fall back to the publish date."""
+    key = _version_key(release.get("tag", ""))
+    return ((1, key) if key is not None else (0, ()), release.get("published_at") or "")
 
 
 def _release_matches_branch(release: Dict[str, Any], branch: str) -> bool:

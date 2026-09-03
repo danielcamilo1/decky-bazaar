@@ -4,6 +4,21 @@ The section for a version is what the release workflow puts on that release's
 page, so write it for someone deciding whether to update — not for someone
 reading the diff.
 
+## v1.1.2
+
+Fixes 1.0.9 being treated as newer than 1.0.10.
+
+Releases were taken in the order GitHub returned them, which is the order they
+were created rather than which version is highest. A plugin sitting on 1.0.9
+could be reported as up to date with 1.0.10 already published, and the release
+picker could offer an older release at the top of the list.
+
+- **Releases are now ordered by version**, so the latest release is the highest
+  one — 1.0.10 after 1.0.9, and a pre-release before the release it leads to.
+- **An update is only offered when it is actually newer.** A release cut for an
+  older line no longer shows up as an update waiting to be installed.
+- Tags that carry no version number at all still fall back to publish date.
+
 ## v1.1.1
 
 Fixes a branch showing up empty when its releases are pre-releases.
