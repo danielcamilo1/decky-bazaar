@@ -63,6 +63,11 @@ export function onInstallFinished(name: string, timeoutMs = 180_000): Promise<bo
 
 // ---------------------------------------------------------------- our backend
 
+/** Where a link came from: typed in by hand, taken from the official plugin
+ * database, or guessed from the files the plugin ships. Sources recorded before
+ * automatic linking existed have none. */
+export type SourceOrigin = 'manual' | 'store' | 'metadata';
+
 export interface SourceRecord {
   owner: string;
   repo: string;
@@ -73,6 +78,25 @@ export interface SourceRecord {
   asset_name: string;
   version: string;
   updated_at: number;
+  origin?: SourceOrigin;
+}
+
+export interface DetectedSource {
+  name: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  origin: Exclude<SourceOrigin, 'manual'>;
+}
+
+export interface AutoLinkResult {
+  ok: boolean;
+  linked: DetectedSource[];
+  /** How many plugins were examined, so "none found" can be told from "none left". */
+  considered: number;
+  /** The plugin database could not be refreshed; detection fell back to a stale
+   * cache, or to plugin metadata alone. */
+  warning: string;
 }
 
 export interface InstalledPlugin {
@@ -184,6 +208,7 @@ export const track = callable<
   { ok: boolean }
 >('track');
 export const untrack = callable<[pluginName: string], { ok: boolean }>('untrack');
+export const autoLink = callable<[onlyUntracked?: boolean], AutoLinkResult>('auto_link');
 export const checkUpdates = callable<
   [],
   { ok: boolean; results: Record<string, UpdateResult>; checked_at: number }

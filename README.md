@@ -11,6 +11,11 @@ installer, remembers the version, and tells you when a newer release shows up.
 ## What it does
 
 - **Lists every installed plugin**, store-sourced or not, read straight from `~/homebrew/plugins`.
+- **Finds the repo for plugins you already have.** One press matches your installed plugins against
+  the official store's plugin database — which records the upstream repo behind every plugin it
+  carries — and links them. Plugins the store never carried fall back to the repo named in their own
+  `plugin.json` and `package.json`; those are marked *detected*, since a plugin's own files can point
+  at the repo it was forked from. Nothing outside GitHub is guessed at.
 - **Adds plugins from GitHub** without typing a URL. You get `https://github.com/` followed by an
   owner field, a `/`, and a repo field. Paste a full URL into either field and it splits itself
   across both.
@@ -48,6 +53,7 @@ Open the Quick Access menu, pick **Decky Bazaar**, and:
 | Action | Where |
 | --- | --- |
 | Install something new | **Add plugin from GitHub** |
+| Link what you already have to its repo | **Find repos for … unlinked plugins** |
 | Re-check every tracked plugin | **Check … for updates** |
 | Update, relink, change branch, or uninstall one plugin | Tap its row in **Installed** |
 | Token and pre-release options | **Settings** |

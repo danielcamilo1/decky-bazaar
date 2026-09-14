@@ -101,6 +101,21 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
     );
   };
 
+  const sourceNote = (() => {
+    if (!source) return undefined;
+    const branchNote = branch
+      ? `Following releases tagged from ${branch}.`
+      : 'Following releases from any branch.';
+    switch (source.origin) {
+      case 'store':
+        return `${branchNote} Linked automatically from the official plugin database.`;
+      case 'metadata':
+        return `${branchNote} Worked out from this plugin's own files — check it points where you expect.`;
+      default:
+        return branchNote;
+    }
+  })();
+
   const statusLine = (() => {
     if (!source) return 'Not linked to a GitHub repo yet.';
     if (!update) {
@@ -133,13 +148,7 @@ export const PluginDetailModal: FC<PluginDetailModalProps> = ({ closeModal, plug
         <Field
           label="Source"
           bottomSeparator="standard"
-          description={
-            source
-              ? branch
-                ? `Following releases tagged from ${branch}.`
-                : 'Following releases from any branch.'
-              : undefined
-          }
+          description={sourceNote}
         >
           {source ? repoUrl(source) : 'unlinked'}
         </Field>

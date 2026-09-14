@@ -10,7 +10,15 @@ import { definePlugin, toaster } from '@decky/api';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FaStore } from 'react-icons/fa';
 
-import { BazaarState, InstalledPlugin, UpdateResult, checkUpdates, getState, untrack } from './lib/api';
+import {
+  BazaarState,
+  InstalledPlugin,
+  UpdateResult,
+  autoLink,
+  checkUpdates,
+  getState,
+  untrack,
+} from './lib/api';
 import { AddRepoModal } from './components/AddRepoModal';
 import { PluginDetailModal } from './components/PluginDetailModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -22,7 +30,9 @@ function statusFor(plugin: InstalledPlugin, update: UpdateResult | undefined): {
     return { badge: plugin.version || '—', note: 'No GitHub repo linked' };
   }
   const source = plugin.source!;
-  const origin = `${source.owner}/${source.repo}${source.branch ? `@${source.branch}` : ''}`;
+  const origin =
+    `${source.owner}/${source.repo}${source.branch ? `@${source.branch}` : ''}` +
+    (source.origin === 'metadata' ? ' (detected)' : '');
   if (!update) {
     return { badge: plugin.version || source.tag || '—', note: origin };
   }
@@ -52,6 +62,7 @@ function Content() {
   const [state, setState] = useState<BazaarState | null>(null);
   const [updates, setUpdates] = useState<UpdateMap>({});
   const [checking, setChecking] = useState(false);
+  const [linking, setLinking] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -63,6 +74,28 @@ function Content() {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  const runAutoLink = useCallback(async () => {
+    setLinking(true);
+    try {
+      const res = await autoLink(true);
+      const guessed = res.linked.filter((l) => l.origin === 'metadata').length;
+      const body = !res.ok
+        ? 'Nothing could be linked.'
+        : res.linked.length === 0
+          ? `No repo could be worked out for ${res.considered} plugin${res.considered === 1 ? '' : 's'}.`
+          : `Linked ${res.linked.length} of ${res.considered} plugin${res.considered === 1 ? '' : 's'}.` +
+            (guessed > 0
+              ? ` ${guessed} came from the plugin's own files rather than the store — worth a look.`
+              : '');
+      toaster.toast({ title: 'Decky Bazaar', body: res.warning ? `${body} (${res.warning})` : body });
+    } catch (e) {
+      toaster.toast({ title: 'Decky Bazaar', body: `Could not detect repos: ${e}` });
+    } finally {
+      setLinking(false);
+      await refresh();
+    }
   }, [refresh]);
 
   const runCheck = useCallback(async () => {
@@ -91,6 +124,7 @@ function Content() {
 
   const plugins = useMemo(() => sortPlugins(state?.plugins ?? [], updates), [state, updates]);
   const trackedCount = plugins.filter((p) => p.tracked).length;
+  const unlinkedCount = plugins.length - trackedCount;
   const updateCount = plugins.filter((p) => updates[p.name]?.status === 'update').length;
 
   if (!state) {
@@ -114,6 +148,15 @@ function Content() {
             Add plugin from GitHub
           </ButtonItem>
         </PanelSectionRow>
+        {unlinkedCount > 0 ? (
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={linking} onClick={runAutoLink}>
+              {linking
+                ? 'Detecting…'
+                : `Find repos for ${unlinkedCount} unlinked plugin${unlinkedCount === 1 ? '' : 's'}`}
+            </ButtonItem>
+          </PanelSectionRow>
+        ) : null}
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={checking || trackedCount === 0} onClick={runCheck}>
             {checking

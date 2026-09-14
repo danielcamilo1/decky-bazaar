@@ -4,6 +4,32 @@ The section for a version is what the release workflow puts on that release's
 page, so write it for someone deciding whether to update — not for someone
 reading the diff.
 
+## v1.2.0
+
+Links installed plugins to the repo they came from, so checking for updates no
+longer means typing a repo for each one by hand.
+
+The official store builds every plugin from a submodule in its plugin database,
+and that database records which repo each plugin comes from. Bazaar now reads
+that index and matches it against the folder a plugin is installed under, which
+resolves every plugin currently in the store. Anything the store has never
+carried falls back to the files the plugin itself ships.
+
+- **Find repos for your unlinked plugins** appears in the panel whenever
+  something is unlinked. One press links everything it can work out, and leaves
+  the rest alone.
+- **Links say where they came from.** One matched against the store's database
+  is taken as fact. One worked out from a plugin's own files is marked
+  *detected*, because those can still name the repo a plugin was forked from
+  rather than the one it is maintained in today — worth a glance, and one press
+  to correct.
+- **An automatic link reports updates immediately**, comparing the version on
+  disk against the latest release instead of waiting for you to mark which
+  release you are on. Any older link with no release recorded benefits too.
+- **Plugins hosted outside GitHub are skipped** rather than guessed at, and a
+  branch the store builds from is not mistaken for the branch releases are
+  tagged on.
+
 ## v1.1.2
 
 Fixes 1.0.9 being treated as newer than 1.0.10.

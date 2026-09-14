@@ -18,6 +18,15 @@ USER_AGENT = "decky-bazaar/0.1 (+https://github.com/SteamDeckHomebrew/decky-load
 SETTINGS_FILE = "bazaar.json"
 STATE_VERSION = 1
 
+# The official store builds every plugin from a git submodule in this repo, so its
+# .gitmodules is an authoritative folder -> upstream repo map. Read over raw. rather
+# than the contents API so it does not spend the 60-per-hour anonymous API budget
+# that release checks need.
+PLUGIN_DB_GITMODULES = (
+    "https://raw.githubusercontent.com/SteamDeckHomebrew/decky-plugin-database/main/.gitmodules"
+)
+STORE_INDEX_TTL = 24 * 60 * 60
+
 DEFAULT_SETTINGS = {
     "include_prereleases": False,
 }
@@ -118,6 +127,7 @@ class Plugin:
         state.setdefault("version", STATE_VERSION)
         state.setdefault("github_token", "")
         state.setdefault("sources", {})
+        state.setdefault("store_index", {"fetched_at": 0, "entries": {}})
         settings = state.setdefault("settings", {})
         for key, value in DEFAULT_SETTINGS.items():
             settings.setdefault(key, value)
@@ -144,6 +154,20 @@ class Plugin:
                 return json.loads(res.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             raise GitHubError(self._describe_http_error(e, token), e.code) from e
+        except urllib.error.URLError as e:
+            raise GitHubError(_describe_url_error(e, "reach GitHub")) from e
+
+    def _request_text(self, url: str) -> str:
+        """Plain-text GET for things that are not the GitHub API — no auth header and
+        no API version, so it neither needs nor spends a token."""
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", USER_AGENT)
+        req.add_header("Accept", "text/plain")
+        try:
+            with _opener().open(req, timeout=30) as res:
+                return res.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            raise GitHubError(f"GitHub returned HTTP {e.code} for the plugin database.", e.code) from e
         except urllib.error.URLError as e:
             raise GitHubError(_describe_url_error(e, "reach GitHub")) from e
 
@@ -224,6 +248,81 @@ class Plugin:
                 pass
             found.append(entry)
         return found
+
+    # --------------------------------------------------------- repo detection
+
+    async def _store_index(self, state: Dict[str, Any], refresh: bool = False) -> tuple:
+        """folder name -> upstream repo, as recorded by the official plugin database.
+        Cached in our own state because it changes about as often as the store does.
+        Returns the entries and a warning, so a network failure falls back to a stale
+        cache rather than losing every detection."""
+        cache = state.get("store_index") or {}
+        entries = cache.get("entries") or {}
+        age = int(time.time()) - int(cache.get("fetched_at") or 0)
+        if entries and age < STORE_INDEX_TTL and not refresh:
+            return entries, ""
+
+        try:
+            text = await asyncio.to_thread(self._request_text, PLUGIN_DB_GITMODULES)
+        except GitHubError as e:
+            decky.logger.warning("Could not refresh the plugin database index: %s", e)
+            return entries, str(e)
+
+        fetched = _parse_gitmodules(text)
+        if not fetched:
+            return entries, "The plugin database index could not be read."
+        state["store_index"] = {"fetched_at": int(time.time()), "entries": fetched}
+        decky.logger.info("Plugin database index refreshed: %d plugins", len(fetched))
+        return fetched, ""
+
+    def _detect_from_metadata(self, folder: str) -> Optional[Dict[str, str]]:
+        """Guess a repo from the files the plugin itself ships. `publish.image` is
+        usually hosted out of the plugin's own repo, and package.json often keeps a
+        repository url — but plenty of plugins never edited the template's, so a
+        scaffold repo is not a detection."""
+        root = os.path.join(self._plugins_dir(), folder)
+        meta = _read_json(os.path.join(root, "plugin.json"))
+        package = _read_json(os.path.join(root, "package.json"))
+        repository = package.get("repository")
+        if isinstance(repository, dict):
+            repository = repository.get("url")
+
+        for text in (
+            (meta.get("publish") or {}).get("image") or "",
+            repository if isinstance(repository, str) else "",
+            package.get("homepage") or "",
+        ):
+            ref = _github_ref(text)
+            if ref and not _is_scaffold(ref):
+                return ref
+        return None
+
+    async def _detect_all(self, state: Dict[str, Any], installed: List[Dict[str, Any]]) -> tuple:
+        """Work out where each installed plugin came from. The store index is taken as
+        fact; anything it does not cover falls back to the plugin's own metadata, which
+        is right about nine times in ten and can name an abandoned fork the plugin was
+        forked from, so the two are reported apart."""
+        entries, warning = await self._store_index(state)
+        detected: Dict[str, Dict[str, Any]] = {}
+
+        for entry in installed:
+            ref = entries.get((entry["folder"] or "").lower())
+            origin = "store"
+            if not ref:
+                ref = await asyncio.to_thread(self._detect_from_metadata, entry["folder"])
+                origin = "metadata"
+            if not ref:
+                continue
+            detected[entry["name"]] = {
+                "owner": ref["owner"],
+                "repo": ref["repo"],
+                # The submodule's branch is the one the store builds from, which is not
+                # necessarily the one releases are tagged on. Pinning to it would risk
+                # an automatic link that matches no release at all, so leave it open.
+                "branch": "",
+                "origin": origin,
+            }
+        return detected, warning
 
     # ------------------------------------------------------------- public API
 
@@ -433,6 +532,7 @@ class Plugin:
             "asset_name": asset_name,
             "version": version,
             "updated_at": int(time.time()),
+            "origin": "manual",
         }
         self._save_state(state)
         decky.logger.info(
@@ -450,6 +550,59 @@ class Plugin:
         if state["sources"].pop(plugin_name, None) is not None:
             self._save_state(state)
         return {"ok": True}
+
+    async def auto_link(self, only_untracked: bool = True) -> Dict[str, Any]:
+        """Link plugins to the repo they came from without the user typing anything.
+        Only the release tag is left blank: nothing here knows which release is on
+        disk, so the next update check settles that by version instead."""
+        state = self._load_state()
+        sources = state["sources"]
+        installed = await asyncio.to_thread(self._read_installed)
+        if only_untracked:
+            installed = [p for p in installed if p["name"] not in sources]
+        else:
+            # A repo the user typed in themselves outranks anything detected here.
+            installed = [p for p in installed if (sources.get(p["name"], {}).get("origin") != "manual")]
+
+        detected, warning = await self._detect_all(state, installed)
+        by_name = {p["name"]: p for p in installed}
+
+        linked: List[Dict[str, Any]] = []
+        for name, ref in detected.items():
+            previous = sources.get(name) or {}
+            # Re-detecting the same repo must not throw away which release we know is
+            # installed; only a move to a different repo invalidates that.
+            same_repo = (
+                previous.get("owner", "").lower() == ref["owner"].lower()
+                and previous.get("repo", "").lower() == ref["repo"].lower()
+            )
+            sources[name] = {
+                "owner": ref["owner"],
+                "repo": ref["repo"],
+                "branch": previous.get("branch", "") if same_repo else ref["branch"],
+                "tag": previous.get("tag", "") if same_repo else "",
+                "asset_name": previous.get("asset_name", "") if same_repo else "",
+                "version": by_name[name].get("version", ""),
+                "updated_at": int(time.time()),
+                "origin": ref["origin"],
+            }
+            linked.append(dict(ref, name=name))
+            decky.logger.info(
+                "Linked %s to %s/%s (from the %s)",
+                name,
+                ref["owner"],
+                ref["repo"],
+                "plugin database" if ref["origin"] == "store" else "plugin's own metadata",
+            )
+
+        # Saved even when nothing was linked, so a freshly fetched store index is kept.
+        self._save_state(state)
+        return {
+            "ok": True,
+            "linked": linked,
+            "considered": len(installed),
+            "warning": warning,
+        }
 
     async def check_updates(self) -> Dict[str, Any]:
         """Check every tracked plugin against its repo's latest usable release."""
@@ -470,8 +623,13 @@ class Plugin:
             latest = listing["releases"][0]
             asset = _pick_asset(latest["assets"], source.get("asset_name", ""))
             known_tag = source.get("tag", "")
-            latest_key, known_key = _version_key(latest["tag"]), _version_key(known_tag)
-            if not known_tag:
+            # An automatically linked plugin has no recorded tag, so fall back to the
+            # version on disk: comparing that against the latest tag is what makes the
+            # link useful without asking the user to name the release they are on.
+            installed_version = installed[name].get("version", "")
+            known_ref = known_tag or installed_version
+            latest_key, known_key = _version_key(latest["tag"]), _version_key(known_ref)
+            if not known_ref or known_key is None:
                 status = "unknown"
             elif latest["tag"] == known_tag:
                 status = "current"
@@ -490,7 +648,7 @@ class Plugin:
                 "prerelease": latest["prerelease"],
                 "notes": latest["notes"],
                 "asset": asset,
-                "installed_tag": known_tag,
+                "installed_tag": known_ref,
                 "branch": branch,
             }
 
@@ -569,6 +727,87 @@ def _release_sort_key(release: Dict[str, Any]) -> tuple:
     for the latest. Tags that carry no version fall back to the publish date."""
     key = _version_key(release.get("tag", ""))
     return ((1, key) if key is not None else (0, ()), release.get("published_at") or "")
+
+
+# github.com covers both https and scp-style remotes; raw. and opengraph. cover the
+# image urls plugins point at their own repo. The owner and repo classes are GitHub's
+# own rules, so a trailing path segment cannot be mistaken for part of the name.
+_GITHUB_URL_RE = re.compile(
+    r"(?:raw\.githubusercontent\.com|opengraph\.githubassets\.com/1|github\.com)"
+    r"[:/]+([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)",
+    re.IGNORECASE,
+)
+
+# Repos a plugin can end up naming without ever meaning to: the template it was
+# generated from still carries its own repository url in package.json, and the
+# template's plugin.json points publish.image at the loader.
+_SCAFFOLD_REPOS = {
+    ("steamdeckhomebrew", "decky-plugin-template"),
+    ("steamdeckhomebrew", "pluginloader"),
+    ("steamdeckhomebrew", "decky-loader"),
+    ("steamdeckhomebrew", "decky-frontend-lib"),
+    ("steamdeckhomebrew", "decky-plugin-database"),
+}
+
+
+def _read_json(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _github_ref(text: str) -> Optional[Dict[str, str]]:
+    """Pull the first owner/repo out of any GitHub url found in the text."""
+    match = _GITHUB_URL_RE.search(text or "")
+    if not match:
+        return None
+    owner, repo = match.group(1), match.group(2)
+    if repo.lower().endswith(".git"):
+        repo = repo[:-4]
+    if not repo or repo in (".", ".."):
+        return None
+    return {"owner": owner, "repo": repo}
+
+
+def _is_scaffold(ref: Dict[str, str]) -> bool:
+    return (ref["owner"].lower(), ref["repo"].lower()) in _SCAFFOLD_REPOS
+
+
+def _parse_gitmodules(text: str) -> Dict[str, Dict[str, str]]:
+    """Turn the plugin database's .gitmodules into folder -> repo. The submodule path
+    is the folder the plugin installs under, which is what makes this a usable key.
+    Plugins hosted somewhere other than GitHub are left out: Bazaar cannot follow
+    their releases, and a wrong guess is worse than no link."""
+    entries: Dict[str, Dict[str, str]] = {}
+    path = url = branch = ""
+
+    def flush() -> None:
+        nonlocal path, url, branch
+        ref = _github_ref(url) if path and url else None
+        if ref:
+            entries[path.rsplit("/", 1)[-1].lower()] = dict(ref, branch=branch)
+        path = url = branch = ""
+
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("[submodule"):
+            flush()
+            continue
+        key, sep, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not value:
+            continue
+        if key == "path":
+            path = value
+        elif key == "url":
+            url = value
+        elif key == "branch":
+            branch = value
+    flush()
+    return entries
 
 
 def _release_matches_branch(release: Dict[str, Any], branch: str) -> bool:
